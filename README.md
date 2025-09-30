@@ -2,6 +2,11 @@
 <h1>🎯 RETRUX SHELF-EYE SYSTEM - INTELLIGENT RETAIL MONITORING</h1>
 
 <p align="center">
+</a>
+    <img src="./thumbnail.png" height="300" alt="packaging-box-website">
+</a>
+</p>
+<p align="center">
 <a target="blank" href="https://www.python.org/">
 <img height="30" src="https://img.shields.io/badge/Python-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python"/>
 </a>
@@ -10,11 +15,6 @@
 </a>
 <a target="blank" href="https://opencv.org/">
 <img height="30" src="https://img.shields.io/badge/OpenCV-5C3EE8?style=for-the-badge&logo=opencv&logoColor=white" alt="OpenCV"/>
-</a>
-</p>
-<p align="center">
-</a>
-    <img src="./thumbnail.png" height="300" alt="packaging-box-website">
 </a>
 </p>
 </div>
