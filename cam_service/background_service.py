@@ -110,16 +110,19 @@ class BackgroundVideoService:
         frame_interval = int(fps * 5)  # 5 seconds
 
         frame_count = 0
+        saved_frame_count = 1
+        video_name = os.path.splitext(os.path.basename(self.video_path))[0]
+
         while not self.stop_event.is_set():
             ret, frame = cap.read()
             if not ret:
                 break
 
             if frame_count % frame_interval == 0:
-                timestamp = time.strftime("%Y%m%d-%H%M%S")
-                frame_filename = os.path.join(self.output_dir, f"video_frame_{timestamp}_{frame_count}.jpg")
+                frame_filename = os.path.join(self.output_dir, f"{video_name}_{saved_frame_count}.jpg")
                 cv.imwrite(frame_filename, frame)
                 print(f"Saved frame to {frame_filename}")
+                saved_frame_count += 1
 
             frame_count += 1
 
