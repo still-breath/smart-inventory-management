@@ -8,10 +8,10 @@ from PyQt6.QtWidgets import (
     QSpinBox, QListWidget, QProgressBar, QTabWidget, QFileDialog,
     QComboBox, QStackedWidget
 )
-from PyQt6.QtCore import QTimer, QThread, pyqtSignal
-from PyQt6.QtGui import QFont
+from PyQt6.QtCore import QTimer, QThread, pyqtSignal, Qt
+from PyQt6.QtGui import QFont, QImage, QPixmap
 from scanner import scan_camera
-from background_service import BackgroundCameraService, BackgroundVideoService
+from background_service import BackgroundCameraService, VideoPreviewService
 
 class CameraServiceThread(QThread):
     status_updated = pyqtSignal(str)
@@ -82,7 +82,7 @@ class CameraServiceWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Retrux Camera Service Control")
-        self.setGeometry(100, 100, 1000, 700)
+        self.setGeometry(100, 100, 1200, 800)
         
         self.service_thread = CameraServiceThread()
         self.service_thread.status_updated.connect(self.log_status)
@@ -91,7 +91,7 @@ class CameraServiceWindow(QMainWindow):
         self.service_thread.service_stopped.connect(self.on_service_stopped)
         
         self.valid_cameras = []
-        self.video_service = None
+        self.video_preview_service = None
         
         self.init_ui()
         
@@ -109,7 +109,8 @@ class CameraServiceWindow(QMainWindow):
         layout.addWidget(title)
         
         # Tab widget
-        tab_widget = QTabWidget()
+        self.tab_widget = QTabWidget()
+        self.tab_widget.currentChanged.connect(self.on_tab_changed)
         
         # Service Control Tab
         service_tab = QWidget()
@@ -170,26 +171,21 @@ class CameraServiceWindow(QMainWindow):
         video_controls_layout = QVBoxLayout(video_controls_widget)
         self.stacked_widget.addWidget(video_controls_widget)
 
-        video_group = QGroupBox("Video Processing")
-        video_controls = QGridLayout(video_group)
+        video_group = QGroupBox("Video Preview")
+        video_controls = QVBoxLayout(video_group)
         self.select_video_btn = QPushButton("Select Video File")
         self.select_video_btn.clicked.connect(self.select_video_file)
-        video_controls.addWidget(self.select_video_btn, 0, 0)
-        self.video_path_label = QLabel("No video selected")
-        video_controls.addWidget(self.video_path_label, 0, 1)
-        self.start_video_btn = QPushButton("Start Video Processing")
-        self.start_video_btn.clicked.connect(self.start_video_service)
-        self.start_video_btn.setEnabled(False)
-        video_controls.addWidget(self.start_video_btn, 1, 0)
-        self.stop_video_btn = QPushButton("Stop Video Processing")
-        self.stop_video_btn.clicked.connect(self.stop_video_service)
-        self.stop_video_btn.setEnabled(False)
-        video_controls.addWidget(self.stop_video_btn, 1, 1)
+        video_controls.addWidget(self.select_video_btn)
+        self.video_preview_label = QLabel("No video selected")
+        self.video_preview_label.setMinimumSize(640, 480)
+        self.video_preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.video_preview_label.setStyleSheet("border: 1px solid #ccc; background-color: #000;")
+        video_controls.addWidget(self.video_preview_label)
         video_controls_layout.addWidget(video_group)
 
-        tab_widget.addTab(service_tab, "Service Control")
+        self.tab_widget.addTab(service_tab, "Service Control")
         
-        layout.addWidget(tab_widget)
+        layout.addWidget(self.tab_widget)
         
         # Status log
         log_group = QGroupBox("Activity Log")
@@ -205,40 +201,35 @@ class CameraServiceWindow(QMainWindow):
         # Initial status
         self.log_status("Camera Service Control Panel initialized")
 
+    def on_tab_changed(self, index):
+        if self.video_preview_service and self.video_preview_service.isRunning():
+            self.video_preview_service.stop()
+
     def on_service_type_changed(self, index):
         self.stacked_widget.setCurrentIndex(index)
+        if self.video_preview_service and self.video_preview_service.isRunning():
+            self.video_preview_service.stop()
 
     def select_video_file(self):
+        if self.video_preview_service and self.video_preview_service.isRunning():
+            self.video_preview_service.stop()
+
         file_dialog = QFileDialog()
         video_dir = "retruxosaproject/app_root/testing"
         video_dir = os.path.abspath(video_dir)
         video_path, _ = file_dialog.getOpenFileName(self, "Select Video File", video_dir, "Video Files (*.mp4 *.avi *.mov)")
         if video_path:
-            self.video_path_label.setText(video_path)
-            self.start_video_btn.setEnabled(True)
+            self.video_preview_service = VideoPreviewService(video_path)
+            self.video_preview_service.frame_ready.connect(self.update_video_preview)
+            self.video_preview_service.start()
+            self.log_status(f"Starting video preview for {video_path}")
 
-    def start_video_service(self):
-        video_path = self.video_path_label.text()
-        if video_path == "No video selected":
-            self.log_status("Please select a video file first.")
-            return
-
-        output_dir = "retruxosaproject/app_root/active_state/devices"
-        output_dir = os.path.abspath(output_dir)
-        os.makedirs(output_dir, exist_ok=True)
-
-        self.video_service = BackgroundVideoService(video_path, output_dir)
-        self.video_service.start()
-        self.log_status(f"Starting video processing for {video_path}")
-        self.start_video_btn.setEnabled(False)
-        self.stop_video_btn.setEnabled(True)
-
-    def stop_video_service(self):
-        if self.video_service:
-            self.video_service.stop()
-            self.log_status("Stopping video processing.")
-            self.start_video_btn.setEnabled(True)
-            self.stop_video_btn.setEnabled(False)
+    def update_video_preview(self, image):
+        pixmap = QPixmap.fromImage(image)
+        self.video_preview_label.setPixmap(pixmap.scaled(
+            self.video_preview_label.width(), self.video_preview_label.height(),
+            Qt.AspectRatioMode.KeepAspectRatio
+        ))
         
     def scan_cameras(self):
         self.scan_btn.setEnabled(False)
@@ -310,8 +301,8 @@ class CameraServiceWindow(QMainWindow):
         if self.service_thread.running:
             self.stop_services()
             self.service_thread.wait(3000)
-        if self.video_service:
-            self.video_service.stop()
+        if self.video_preview_service and self.video_preview_service.isRunning():
+            self.video_preview_service.stop()
         event.accept()
 
 def main():

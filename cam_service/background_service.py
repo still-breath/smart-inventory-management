@@ -2,10 +2,10 @@ import time
 import copy
 import random
 import threading
-import subprocess
-
-import cv2   as cv
+import cv2 as cv
 import numpy as np
+from PyQt6.QtCore import QThread, pyqtSignal
+from PyQt6.QtGui import QImage
 
 class BackgroundCameraService:
     def __init__(self, task_id : str, camera_index : int, fpath : str):
@@ -89,12 +89,12 @@ class BackgroundCameraService:
 
 import os
 
-class BackgroundVideoService:
-    def __init__(self, video_path: str, output_dir: str):
+class VideoPreviewService(QThread):
+    frame_ready = pyqtSignal(QImage)
+
+    def __init__(self, video_path: str):
+        super().__init__()
         self.video_path = video_path
-        self.output_dir = output_dir
-        self.thread = threading.Thread(target=self.run)
-        self.thread.daemon = True
         self.stop_event = threading.Event()
 
     def run(self):
@@ -103,34 +103,20 @@ class BackgroundVideoService:
             print(f"Error opening video file: {self.video_path}")
             return
 
-        fps = cap.get(cv.CAP_PROP_FPS)
-        # If fps is 0, use a default value
-        if fps == 0:
-            fps = 30
-        frame_interval = int(fps * 5)  # 5 seconds
-
-        frame_count = 0
-        saved_frame_count = 1
-        video_name = os.path.splitext(os.path.basename(self.video_path))[0]
-
         while not self.stop_event.is_set():
             ret, frame = cap.read()
             if not ret:
-                break
+                cap.set(cv.CAP_PROP_POS_FRAMES, 0)
+                continue
 
-            if frame_count % frame_interval == 0:
-                frame_filename = os.path.join(self.output_dir, f"{video_name}_{saved_frame_count}.jpg")
-                cv.imwrite(frame_filename, frame)
-                print(f"Saved frame to {frame_filename}")
-                saved_frame_count += 1
-
-            frame_count += 1
+            rgb_image = cv.cvtColor(frame, cv.COLOR_BGR2RGB)
+            h, w, ch = rgb_image.shape
+            bytes_per_line = ch * w
+            qt_image = QImage(rgb_image.data, w, h, bytes_per_line, QImage.Format.Format_RGB888)
+            self.frame_ready.emit(qt_image)
+            self.msleep(33) # ~30 fps
 
         cap.release()
-        print("Video processing finished.")
-
-    def start(self):
-        self.thread.start()
 
     def stop(self):
         self.stop_event.set()
