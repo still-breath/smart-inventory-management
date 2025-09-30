@@ -96,6 +96,7 @@ class VideoPreviewService(QThread):
         super().__init__()
         self.video_path = video_path
         self.stop_event = threading.Event()
+        self.current_frame = None
 
     def run(self):
         cap = cv.VideoCapture(self.video_path)
@@ -109,6 +110,7 @@ class VideoPreviewService(QThread):
                 cap.set(cv.CAP_PROP_POS_FRAMES, 0)
                 continue
 
+            self.current_frame = frame
             rgb_image = cv.cvtColor(frame, cv.COLOR_BGR2RGB)
             h, w, ch = rgb_image.shape
             bytes_per_line = ch * w
@@ -117,6 +119,9 @@ class VideoPreviewService(QThread):
             self.msleep(33) # ~30 fps
 
         cap.release()
+
+    def get_current_frame(self):
+        return self.current_frame
 
     def stop(self):
         self.stop_event.set()

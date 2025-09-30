@@ -1,7 +1,4 @@
 #!/usr/bin/env python3
-"""
-Retrux Shelf-Eye System Launcher - Safe Version
-"""
 
 import sys
 import os
@@ -98,9 +95,9 @@ class RetruxLauncher(QMainWindow):
         right_group = QGroupBox("Product Scanner")
         right_layout = QVBoxLayout(right_group)
         
-        self.scanner_setup_btn = QPushButton("⚙️ Run Setup")
-        self.scanner_setup_btn.clicked.connect(self.run_scanner_setup)
-        right_layout.addWidget(self.scanner_setup_btn)
+        # self.scanner_setup_btn = QPushButton("⚙️ Run Setup")
+        # self.scanner_setup_btn.clicked.connect(self.run_scanner_setup)
+        # right_layout.addWidget(self.scanner_setup_btn)
         
         self.scanner_service_btn = QPushButton("🔍 Start Scanner")
         self.scanner_service_btn.clicked.connect(self.toggle_scanner_service)
