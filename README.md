@@ -11,8 +11,9 @@
 <a target="blank" href="https://opencv.org/">
 <img height="30" src="https://img.shields.io/badge/OpenCV-5C3EE8?style=for-the-badge&logo=opencv&logoColor=white" alt="OpenCV"/>
 </a>
+</p>
+<p align="center">
 </a>
-<br><br>
     <img src="./thumbnail.png" height="300" alt="packaging-box-website">
 </a>
 </p>
