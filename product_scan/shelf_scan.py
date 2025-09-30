@@ -15,9 +15,6 @@ from oliwo_weights.xcodiff import (
     get_matching_prod_names
 )
 
-# Fix: Use correct relative path from product_scan directory
-# When running from project root: python product_scan/shelf_scan.py
-# When running from product_scan: python shelf_scan.py
 def get_absolute_root_directory():
     """Get the correct path to retruxosaproject directory"""
     # Get the directory where this script is located

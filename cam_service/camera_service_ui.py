@@ -5,12 +5,13 @@ import threading
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QTextEdit, QGroupBox, QGridLayout,
-    QSpinBox, QListWidget, QProgressBar, QTabWidget
+    QSpinBox, QListWidget, QProgressBar, QTabWidget, QFileDialog,
+    QComboBox, QStackedWidget
 )
 from PyQt6.QtCore import QTimer, QThread, pyqtSignal
 from PyQt6.QtGui import QFont
 from scanner import scan_camera
-from background_service import BackgroundCameraService
+from background_service import BackgroundCameraService, BackgroundVideoService
 
 class CameraServiceThread(QThread):
     status_updated = pyqtSignal(str)
@@ -90,6 +91,7 @@ class CameraServiceWindow(QMainWindow):
         self.service_thread.service_stopped.connect(self.on_service_stopped)
         
         self.valid_cameras = []
+        self.video_service = None
         
         self.init_ui()
         
@@ -109,75 +111,82 @@ class CameraServiceWindow(QMainWindow):
         # Tab widget
         tab_widget = QTabWidget()
         
-        # Camera Discovery Tab
-        discovery_tab = QWidget()
-        discovery_layout = QVBoxLayout(discovery_tab)
-        
+        # Service Control Tab
+        service_tab = QWidget()
+        service_layout = QVBoxLayout(service_tab)
+
+        # Service Type Selection
+        service_type_group = QGroupBox("Service Type")
+        service_type_layout = QHBoxLayout(service_type_group)
+        self.service_type_combo = QComboBox()
+        self.service_type_combo.addItems(["Camera", "Video"])
+        self.service_type_combo.currentIndexChanged.connect(self.on_service_type_changed)
+        service_type_layout.addWidget(self.service_type_combo)
+        service_layout.addWidget(service_type_group)
+
+        # Stacked widget for controls
+        self.stacked_widget = QStackedWidget()
+        service_layout.addWidget(self.stacked_widget)
+
+        # Camera Controls
+        camera_controls_widget = QWidget()
+        camera_controls_layout = QVBoxLayout(camera_controls_widget)
+        self.stacked_widget.addWidget(camera_controls_widget)
+
         # Discovery controls
         discovery_group = QGroupBox("Camera Discovery")
         discovery_controls = QGridLayout(discovery_group)
-        
         discovery_controls.addWidget(QLabel("Search Limit:"), 0, 0)
         self.search_limit_spin = QSpinBox()
         self.search_limit_spin.setRange(1, 100)
         self.search_limit_spin.setValue(10)
         discovery_controls.addWidget(self.search_limit_spin, 0, 1)
-        
         self.scan_btn = QPushButton("Scan for Cameras")
         self.scan_btn.clicked.connect(self.scan_cameras)
         discovery_controls.addWidget(self.scan_btn, 0, 2)
-        
-        discovery_layout.addWidget(discovery_group)
-        
+        camera_controls_layout.addWidget(discovery_group)
+
         # Camera list
         camera_list_group = QGroupBox("Detected Cameras")
         camera_list_layout = QVBoxLayout(camera_list_group)
-        
         self.camera_list = QListWidget()
         camera_list_layout.addWidget(self.camera_list)
-        
-        discovery_layout.addWidget(camera_list_group)
-        
-        tab_widget.addTab(discovery_tab, "Camera Discovery")
-        
-        # Service Control Tab
-        service_tab = QWidget()
-        service_layout = QVBoxLayout(service_tab)
-        
-        # Service controls
-        service_group = QGroupBox("Service Control")
-        service_controls = QGridLayout(service_group)
-        
-        service_controls.addWidget(QLabel("Output Directory:"), 0, 0)
-        self.output_dir_label = QLabel("../retruxosaproject/app_root/active_state/devices")
-        service_controls.addWidget(self.output_dir_label, 0, 1)
-        
+        camera_controls_layout.addWidget(camera_list_group)
+
         # Service buttons
         button_layout = QHBoxLayout()
         self.start_service_btn = QPushButton("Start Camera Services")
         self.start_service_btn.clicked.connect(self.start_services)
         self.start_service_btn.setEnabled(False)
-        
         self.stop_service_btn = QPushButton("Stop Camera Services")
         self.stop_service_btn.clicked.connect(self.stop_services)
         self.stop_service_btn.setEnabled(False)
-        
         button_layout.addWidget(self.start_service_btn)
         button_layout.addWidget(self.stop_service_btn)
-        service_controls.addLayout(button_layout, 1, 0, 1, 2)
-        
-        service_layout.addWidget(service_group)
-        
-        # Service status
-        service_status_group = QGroupBox("Service Status")
-        service_status_layout = QVBoxLayout(service_status_group)
-        
-        self.service_status_label = QLabel("Services: Stopped")
-        self.service_status_label.setStyleSheet("font-weight: bold; color: red;")
-        service_status_layout.addWidget(self.service_status_label)
-        
-        service_layout.addWidget(service_status_group)
-        
+        camera_controls_layout.addLayout(button_layout)
+
+        # Video Controls
+        video_controls_widget = QWidget()
+        video_controls_layout = QVBoxLayout(video_controls_widget)
+        self.stacked_widget.addWidget(video_controls_widget)
+
+        video_group = QGroupBox("Video Processing")
+        video_controls = QGridLayout(video_group)
+        self.select_video_btn = QPushButton("Select Video File")
+        self.select_video_btn.clicked.connect(self.select_video_file)
+        video_controls.addWidget(self.select_video_btn, 0, 0)
+        self.video_path_label = QLabel("No video selected")
+        video_controls.addWidget(self.video_path_label, 0, 1)
+        self.start_video_btn = QPushButton("Start Video Processing")
+        self.start_video_btn.clicked.connect(self.start_video_service)
+        self.start_video_btn.setEnabled(False)
+        video_controls.addWidget(self.start_video_btn, 1, 0)
+        self.stop_video_btn = QPushButton("Stop Video Processing")
+        self.stop_video_btn.clicked.connect(self.stop_video_service)
+        self.stop_video_btn.setEnabled(False)
+        video_controls.addWidget(self.stop_video_btn, 1, 1)
+        video_controls_layout.addWidget(video_group)
+
         tab_widget.addTab(service_tab, "Service Control")
         
         layout.addWidget(tab_widget)
@@ -195,6 +204,41 @@ class CameraServiceWindow(QMainWindow):
         
         # Initial status
         self.log_status("Camera Service Control Panel initialized")
+
+    def on_service_type_changed(self, index):
+        self.stacked_widget.setCurrentIndex(index)
+
+    def select_video_file(self):
+        file_dialog = QFileDialog()
+        video_dir = "retruxosaproject/app_root/testing"
+        video_dir = os.path.abspath(video_dir)
+        video_path, _ = file_dialog.getOpenFileName(self, "Select Video File", video_dir, "Video Files (*.mp4 *.avi *.mov)")
+        if video_path:
+            self.video_path_label.setText(video_path)
+            self.start_video_btn.setEnabled(True)
+
+    def start_video_service(self):
+        video_path = self.video_path_label.text()
+        if video_path == "No video selected":
+            self.log_status("Please select a video file first.")
+            return
+
+        output_dir = "retruxosaproject/app_root/active_state/devices"
+        output_dir = os.path.abspath(output_dir)
+        os.makedirs(output_dir, exist_ok=True)
+
+        self.video_service = BackgroundVideoService(video_path, output_dir)
+        self.video_service.start()
+        self.log_status(f"Starting video processing for {video_path}")
+        self.start_video_btn.setEnabled(False)
+        self.stop_video_btn.setEnabled(True)
+
+    def stop_video_service(self):
+        if self.video_service:
+            self.video_service.stop()
+            self.log_status("Stopping video processing.")
+            self.start_video_btn.setEnabled(True)
+            self.stop_video_btn.setEnabled(False)
         
     def scan_cameras(self):
         self.scan_btn.setEnabled(False)
@@ -224,7 +268,7 @@ class CameraServiceWindow(QMainWindow):
             self.log_status("No cameras available to start")
             return
             
-        root_dir = "../retruxosaproject/app_root/active_state/devices"
+        root_dir = "retruxosaproject/app_root/active_state/devices"
         root_dir = os.path.abspath(root_dir)
         
         self.service_thread.set_root_directory(root_dir)
@@ -266,6 +310,8 @@ class CameraServiceWindow(QMainWindow):
         if self.service_thread.running:
             self.stop_services()
             self.service_thread.wait(3000)
+        if self.video_service:
+            self.video_service.stop()
         event.accept()
 
 def main():

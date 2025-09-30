@@ -287,7 +287,7 @@ Ready to run setup and services!"""
             self.stop_process('camera_service')
             self.camera_service_btn.setText("🎥 Start Camera Service")
         else:
-            self.start_process('camera_service', [sys.executable, "cam_service/camera_server.py"], "Camera Service")
+            self.start_process('camera_service', [sys.executable, "cam_service/camera_service_ui.py"], "Camera Service")
             self.camera_service_btn.setText("🛑 Stop Camera Service")
             
     def toggle_camera_display(self):

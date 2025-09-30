@@ -86,3 +86,48 @@ class BackgroundCameraService:
 
     def stop(self):
         self.stop_event.set()
+
+import os
+
+class BackgroundVideoService:
+    def __init__(self, video_path: str, output_dir: str):
+        self.video_path = video_path
+        self.output_dir = output_dir
+        self.thread = threading.Thread(target=self.run)
+        self.thread.daemon = True
+        self.stop_event = threading.Event()
+
+    def run(self):
+        cap = cv.VideoCapture(self.video_path)
+        if not cap.isOpened():
+            print(f"Error opening video file: {self.video_path}")
+            return
+
+        fps = cap.get(cv.CAP_PROP_FPS)
+        # If fps is 0, use a default value
+        if fps == 0:
+            fps = 30
+        frame_interval = int(fps * 5)  # 5 seconds
+
+        frame_count = 0
+        while not self.stop_event.is_set():
+            ret, frame = cap.read()
+            if not ret:
+                break
+
+            if frame_count % frame_interval == 0:
+                timestamp = time.strftime("%Y%m%d-%H%M%S")
+                frame_filename = os.path.join(self.output_dir, f"video_frame_{timestamp}_{frame_count}.jpg")
+                cv.imwrite(frame_filename, frame)
+                print(f"Saved frame to {frame_filename}")
+
+            frame_count += 1
+
+        cap.release()
+        print("Video processing finished.")
+
+    def start(self):
+        self.thread.start()
+
+    def stop(self):
+        self.stop_event.set()
