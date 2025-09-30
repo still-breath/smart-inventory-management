@@ -4,6 +4,7 @@ import time
 import threading
 import subprocess
 import cv2 as cv
+from datetime import datetime
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QTextEdit, QGroupBox, QGridLayout,
@@ -52,8 +53,8 @@ class SetupFromVideoThread(QThread):
             shelf_scan_script = os.path.join(project_root, 'product_scan', 'shelf_scan.py')
 
             if not os.path.exists(shelf_scan_script):
-                 shelf_scan_script = os.path.join(project_root, 'shelf_scan.py')
-                 if not os.path.exists(shelf_scan_script):
+                shelf_scan_script = os.path.join(project_root, 'shelf_scan.py')
+                if not os.path.exists(shelf_scan_script):
                     self.status_updated.emit(f"ERROR: 'shelf_scan.py' tidak ditemukan.")
                     return
 
@@ -76,6 +77,120 @@ class SetupFromVideoThread(QThread):
             self.status_updated.emit(f"Terjadi error saat setup: {e}")
         finally:
             self.setup_finished.emit()
+
+
+class ScannerServiceThread(QThread):
+    status_updated = pyqtSignal(str)
+    scanner_started = pyqtSignal()
+    scanner_stopped = pyqtSignal()
+    frame_saved = pyqtSignal(str)
+
+    def __init__(self, video_preview_service, devices_dir, video_path):
+        super().__init__()
+        self.video_preview_service = video_preview_service
+        self.devices_dir = devices_dir
+        self.video_path = video_path
+        self.is_running = False
+        self.scanner_process = None
+        self.base_name = os.path.splitext(os.path.basename(video_path))[0]
+        
+        # Setup paths for product info copying
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        project_root = os.path.dirname(script_dir)
+        app_root = os.path.join(project_root, 'retruxosaproject', 'app_root')
+        self.product_info_dir = os.path.join(app_root, 'product_information')
+        self.last_state_dir = os.path.join(app_root, 'last_state')
+        
+    def run(self):
+        try:
+            self.is_running = True
+            self.scanner_started.emit()
+            self.status_updated.emit("🔍 Scanner Service dimulai...")
+            
+            # Check if base setup exists
+            base_product_info = os.path.join(self.product_info_dir, f"{self.base_name}.json")
+            if not os.path.exists(base_product_info):
+                self.status_updated.emit("⚠️ Setup belum dilakukan! Jalankan Setup terlebih dahulu.")
+                return
+            
+            # Start shelf_scan service in background
+            self.start_scanner_service()
+            
+            # Main loop untuk menyimpan frame dengan timestamp
+            frame_counter = 0
+            while self.is_running:
+                if self.video_preview_service and self.video_preview_service.isRunning():
+                    current_frame = self.video_preview_service.get_current_frame()
+                    if current_frame is not None:
+                        # Strategy 1: Use fixed filename (recommended)
+                        # Always overwrite the same file so shelf_scan can monitor it
+                        fixed_frame_filename = f"{self.base_name}.jpg"
+                        fixed_frame_path = os.path.join(self.devices_dir, fixed_frame_filename)
+                        
+                        # Strategy 2: Also save timestamp version for history
+                        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                        timestamp_filename = f"{self.base_name}_{timestamp}.jpg"
+                        timestamp_path = os.path.join(self.devices_dir, timestamp_filename)
+                        
+                        # Save both versions
+                        cv.imwrite(fixed_frame_path, current_frame)  # For shelf_scan monitoring
+                        cv.imwrite(timestamp_path, current_frame)    # For history/backup
+                        
+                        self.frame_saved.emit(fixed_frame_filename)
+                        self.status_updated.emit(f"📸 Frame disimpan: {fixed_frame_filename} & {timestamp_filename}")
+                        
+                        frame_counter += 1
+                        
+                # Wait 5 seconds before next frame capture
+                for i in range(50):  # 5 seconds = 50 * 0.1 seconds
+                    if not self.is_running:
+                        break
+                    time.sleep(0.1)
+                        
+        except Exception as e:
+            self.status_updated.emit(f"❌ Error pada Scanner Service: {e}")
+        finally:
+            self.stop_scanner_service()
+            self.scanner_stopped.emit()
+            self.status_updated.emit("🛑 Scanner Service dihentikan.")
+
+    def start_scanner_service(self):
+        try:
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            project_root = os.path.dirname(script_dir)
+            shelf_scan_script = os.path.join(project_root, 'product_scan', 'shelf_scan.py')
+
+            if not os.path.exists(shelf_scan_script):
+                shelf_scan_script = os.path.join(project_root, 'shelf_scan.py')
+
+            if os.path.exists(shelf_scan_script):
+                self.scanner_process = subprocess.Popen(
+                    [sys.executable, shelf_scan_script, "service"],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True
+                )
+                self.status_updated.emit("🚀 Shelf Scanner Service dimulai di background")
+            else:
+                self.status_updated.emit("⚠️ shelf_scan.py tidak ditemukan, hanya menyimpan frame")
+                
+        except Exception as e:
+            self.status_updated.emit(f"⚠️ Tidak bisa memulai scanner service: {e}")
+
+    def stop_scanner_service(self):
+        if self.scanner_process:
+            try:
+                self.scanner_process.terminate()
+                self.scanner_process.wait(timeout=5)
+                self.status_updated.emit("🔚 Scanner Service process dihentikan")
+            except subprocess.TimeoutExpired:
+                self.scanner_process.kill()
+                self.status_updated.emit("🔪 Scanner Service process dipaksa berhenti")
+            except Exception as e:
+                self.status_updated.emit(f"⚠️ Error menghentikan scanner process: {e}")
+
+    def stop(self):
+        self.is_running = False
 
 
 class CameraServiceThread(QThread):
@@ -158,7 +273,8 @@ class CameraServiceWindow(QMainWindow):
         self.valid_cameras = []
         self.video_preview_service = None
         self.setup_thread = None
-        self.current_video_path = None # Variabel untuk menyimpan path video
+        self.scanner_thread = None
+        self.current_video_path = None
 
         self.init_ui()
 
@@ -239,12 +355,29 @@ class CameraServiceWindow(QMainWindow):
         self.video_preview_label.setStyleSheet("border: 1px solid #ccc; background-color: #000;")
         video_controls.addWidget(self.video_preview_label)
 
-        self.run_setup_btn = QPushButton("⚙️ Run Setup from This Frame")
+        # Button layout for setup and scanner
+        video_button_layout = QHBoxLayout()
+        
+        self.run_setup_btn = QPushButton("⚙️ Run Setup")
         self.run_setup_btn.clicked.connect(self.run_setup_from_video)
         self.run_setup_btn.setVisible(False)
         self.run_setup_btn.setStyleSheet("background-color: #4CAF50; font-weight: bold;")
-        video_controls.addWidget(self.run_setup_btn)
-
+        
+        self.run_scanner_btn = QPushButton("🔍 Run Scanner")
+        self.run_scanner_btn.clicked.connect(self.run_scanner_service)
+        self.run_scanner_btn.setVisible(False)
+        self.run_scanner_btn.setStyleSheet("background-color: #2196F3; color: white; font-weight: bold;")
+        
+        self.stop_scanner_btn = QPushButton("🛑 Stop Scanner")
+        self.stop_scanner_btn.clicked.connect(self.stop_scanner_service)
+        self.stop_scanner_btn.setVisible(False)
+        self.stop_scanner_btn.setStyleSheet("background-color: #f44336; color: white; font-weight: bold;")
+        
+        video_button_layout.addWidget(self.run_setup_btn)
+        video_button_layout.addWidget(self.run_scanner_btn)
+        video_button_layout.addWidget(self.stop_scanner_btn)
+        
+        video_controls.addLayout(video_button_layout)
         video_controls_layout.addWidget(video_group)
         self.tab_widget.addTab(service_tab, "Service Control")
         layout.addWidget(self.tab_widget)
@@ -286,28 +419,93 @@ class CameraServiceWindow(QMainWindow):
         self.setup_thread.setup_finished.connect(self.on_setup_finished)
         self.setup_thread.start()
 
+    def run_scanner_service(self):
+        if not self.video_preview_service or not self.video_preview_service.isRunning():
+            self.log_status("ERROR: Video preview tidak berjalan.")
+            return
+            
+        if self.current_video_path is None:
+            self.log_status("ERROR: Path video tidak ditemukan.")
+            return
+
+        if self.scanner_thread and self.scanner_thread.isRunning():
+            self.log_status("Scanner service sudah berjalan.")
+            return
+
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        project_root = os.path.dirname(script_dir)
+        devices_dir = os.path.join(project_root, 'retruxosaproject', 'app_root', 'active_state', 'devices')
+        os.makedirs(devices_dir, exist_ok=True)
+
+        self.scanner_thread = ScannerServiceThread(
+            self.video_preview_service, 
+            devices_dir, 
+            self.current_video_path
+        )
+        
+        self.scanner_thread.status_updated.connect(self.log_status)
+        self.scanner_thread.scanner_started.connect(self.on_scanner_started)
+        self.scanner_thread.scanner_stopped.connect(self.on_scanner_stopped)
+        self.scanner_thread.frame_saved.connect(self.on_frame_saved)
+        
+        self.scanner_thread.start()
+
+    def stop_scanner_service(self):
+        if self.scanner_thread and self.scanner_thread.isRunning():
+            self.scanner_thread.stop()
+            self.scanner_thread.wait(5000)  # Wait up to 5 seconds
+            if self.scanner_thread.isRunning():
+                self.scanner_thread.terminate()
+            self.log_status("🛑 Scanner service dihentikan")
+        else:
+            self.log_status("Scanner service tidak berjalan")
+
+    def on_scanner_started(self):
+        self.run_scanner_btn.setVisible(False)
+        self.stop_scanner_btn.setVisible(True)
+        self.run_scanner_btn.setText("🔍 Run Scanner")
+        self.log_status("✅ Scanner Service berhasil dimulai")
+
+    def on_scanner_stopped(self):
+        self.run_scanner_btn.setVisible(True)
+        self.stop_scanner_btn.setVisible(False)
+        self.log_status("✅ Scanner Service berhasil dihentikan")
+
+    def on_frame_saved(self, filename):
+        # Optional: You can add additional logic here when a frame is saved
+        pass
+
     def on_setup_finished(self):
         self.log_status("Thread setup selesai.")
         self.run_setup_btn.setEnabled(True)
-        self.run_setup_btn.setText("⚙️ Run Setup from This Frame")
+        self.run_setup_btn.setText("⚙️ Run Setup")
         self.setup_thread = None
 
     def on_tab_changed(self, index):
         if self.video_preview_service and self.video_preview_service.isRunning():
             self.video_preview_service.stop()
             self.run_setup_btn.setVisible(False)
+            self.run_scanner_btn.setVisible(False)
+            self.stop_scanner_btn.setVisible(False)
 
     def on_service_type_changed(self, index):
         self.stacked_widget.setCurrentIndex(index)
         if self.video_preview_service and self.video_preview_service.isRunning():
             self.video_preview_service.stop()
             self.run_setup_btn.setVisible(False)
+            self.run_scanner_btn.setVisible(False)
+            self.stop_scanner_btn.setVisible(False)
 
     def select_video_file(self):
         if self.video_preview_service and self.video_preview_service.isRunning():
             self.video_preview_service.stop()
         
+        # Stop scanner if running
+        self.stop_scanner_service()
+        
         self.run_setup_btn.setVisible(False)
+        self.run_scanner_btn.setVisible(False)
+        self.stop_scanner_btn.setVisible(False)
 
         file_dialog = QFileDialog()
         script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -316,12 +514,13 @@ class CameraServiceWindow(QMainWindow):
         
         video_path, _ = file_dialog.getOpenFileName(self, "Select Video File", video_dir, "Video Files (*.mp4 *.mov)")
         if video_path:
-            self.current_video_path = video_path # Simpan path video
+            self.current_video_path = video_path
             self.video_preview_service = VideoPreviewService(video_path)
             self.video_preview_service.frame_ready.connect(self.update_video_preview)
             self.video_preview_service.start()
             self.log_status(f"Starting video preview for {video_path}")
             self.run_setup_btn.setVisible(True)
+            self.run_scanner_btn.setVisible(True)
 
     def update_video_preview(self, image):
         pixmap = QPixmap.fromImage(image)
@@ -386,14 +585,21 @@ class CameraServiceWindow(QMainWindow):
         self.status_log.append(f"[{timestamp}] {message}")
 
     def closeEvent(self, event):
+        # Stop all services before closing
+        if self.scanner_thread and self.scanner_thread.isRunning():
+            self.stop_scanner_service()
+            
         if self.service_thread.running:
             self.stop_services()
             self.service_thread.wait(3000)
+            
         if self.video_preview_service and self.video_preview_service.isRunning():
             self.video_preview_service.stop()
+            
         if self.setup_thread and self.setup_thread.isRunning():
             self.setup_thread.quit()
             self.setup_thread.wait()
+            
         event.accept()
 
 def main():
