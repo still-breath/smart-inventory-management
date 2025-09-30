@@ -216,8 +216,6 @@ __marimo__/
 runs*
 
 # media files
-*.jpg
-*.png
 *.json
 
 # mac os suffering
