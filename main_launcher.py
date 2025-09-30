@@ -69,21 +69,12 @@ class RetruxLauncher(QMainWindow):
         controls_layout = QHBoxLayout()
         
         # Left side - Camera & Display
-        left_group = QGroupBox("Camera System")
+        left_group = QGroupBox("Services Control")
         left_layout = QVBoxLayout(left_group)
         
         self.camera_service_btn = QPushButton("🎥 Start Camera Service")
         self.camera_service_btn.clicked.connect(self.toggle_camera_service)
         left_layout.addWidget(self.camera_service_btn)
-        
-        self.camera_display_btn = QPushButton("📺 Start Raw Display")
-        self.camera_display_btn.clicked.connect(self.toggle_camera_display)
-        left_layout.addWidget(self.camera_display_btn)
-
-        self.product_display_btn = QPushButton("📺 Start Predicted Display")
-        self.product_display_btn.clicked.connect(self.toggle_product_display)
-        left_layout.addWidget(self.product_display_btn)
-
         
         self.people_counter_btn = QPushButton("👥 People Counter")
         self.people_counter_btn.clicked.connect(self.open_people_counter)
@@ -92,20 +83,16 @@ class RetruxLauncher(QMainWindow):
         controls_layout.addWidget(left_group)
         
         # Right side - Product Scanner
-        right_group = QGroupBox("Product Scanner")
+        right_group = QGroupBox("Camera Display")
         right_layout = QVBoxLayout(right_group)
-        
-        # self.scanner_setup_btn = QPushButton("⚙️ Run Setup")
-        # self.scanner_setup_btn.clicked.connect(self.run_scanner_setup)
-        # right_layout.addWidget(self.scanner_setup_btn)
-        
-        self.scanner_service_btn = QPushButton("🔍 Start Scanner")
-        self.scanner_service_btn.clicked.connect(self.toggle_scanner_service)
-        right_layout.addWidget(self.scanner_service_btn)
-        
-        self.scanner_prediction_btn = QPushButton("🖼️ Test Prediction")
-        self.scanner_prediction_btn.clicked.connect(self.test_prediction)
-        right_layout.addWidget(self.scanner_prediction_btn)
+
+        self.camera_display_btn = QPushButton("📺 Start Raw Display")
+        self.camera_display_btn.clicked.connect(self.toggle_camera_display)
+        right_layout.addWidget(self.camera_display_btn)
+
+        self.product_display_btn = QPushButton("📺 Start Predicted Display")
+        self.product_display_btn.clicked.connect(self.toggle_product_display)
+        right_layout.addWidget(self.product_display_btn)
         
         controls_layout.addWidget(right_group)
         layout.addLayout(controls_layout)
@@ -282,10 +269,10 @@ Ready to run setup and services!"""
     def toggle_camera_service(self):
         if 'camera_service' in self.processes:
             self.stop_process('camera_service')
-            self.camera_service_btn.setText("🎥 Start Camera Service")
+            self.camera_service_btn.setText("🎥 Start Service")
         else:
             self.start_process('camera_service', [sys.executable, "cam_service/camera_service_ui.py"], "Camera Service")
-            self.camera_service_btn.setText("🛑 Stop Camera Service")
+            self.camera_service_btn.setText("🛑 Stop Service")
             
     def toggle_camera_display(self):
         if 'camera_display' in self.processes:
