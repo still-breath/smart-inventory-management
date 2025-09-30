@@ -16,11 +16,11 @@ from oliwo_weights.xcodiff import (
 )
 
 def get_absolute_root_directory():
-    """Get the correct path to retruxosaproject directory"""
-    # Get the directory where this script is located
+    """Get the correct path to retruxosaproject directory based on actual structure"""
+    # Get the directory where this script is located (product_scan/)
     script_dir = os.path.dirname(os.path.abspath(__file__))
     
-    # Go up one level to project root, then into retruxosaproject
+    # Go up one level to project root (retrux-shelf-eye/), then into retruxosaproject
     project_root = os.path.dirname(script_dir)
     retrux_path = os.path.join(project_root, 'retruxosaproject', 'app_root', 'active_state')
     
@@ -30,7 +30,7 @@ def get_absolute_root_directory():
     
     # Check if path exists
     if not os.path.exists(retrux_path):
-        # Try alternative path (if running from project_scan directory)
+        # Alternative: if running from different location
         alt_retrux_path = os.path.join(script_dir, '..', 'retruxosaproject', 'app_root', 'active_state')
         alt_retrux_path = os.path.abspath(alt_retrux_path)
         print(f"Alternative path: {alt_retrux_path}")
@@ -41,7 +41,15 @@ def get_absolute_root_directory():
             print(f"ERROR: Neither path exists:")
             print(f"  Primary: {retrux_path}")
             print(f"  Alternative: {alt_retrux_path}")
-            raise FileNotFoundError(f"Cannot find retruxosaproject directory")
+            print(f"Current working directory: {os.getcwd()}")
+            
+            # Create the directory structure if it doesn't exist
+            try:
+                os.makedirs(retrux_path, exist_ok=True)
+                print(f"Created directory structure: {retrux_path}")
+                return retrux_path
+            except Exception as e:
+                raise FileNotFoundError(f"Cannot find or create retruxosaproject directory: {e}")
     
     return retrux_path
 
@@ -54,7 +62,7 @@ def predict_single_file(oliwo : OliwoModel, src : str, trg : str) -> None:
         output_file = trg
     )
 
-def load_prdocuts(latest_frame_file : str):
+def load_products(latest_frame_file : str):
     global absolute_root_directory
 
     # get directories - fix path structure
@@ -75,20 +83,21 @@ def load_prdocuts(latest_frame_file : str):
     with open(prod_info_jsf, 'r') as file:
         products_list : list[dict[str, any]] = json.load(file)
 
-    # assuming everything at the latest is empty
-    product_latest_state = [
-        {
-            'name'   : x['name'],
-            'coords' : x['coords'],
-            'state'  : 'full'
-        }
-        for x in products_list
-    ]
-    
+    # Load existing product state or create initial state
     prod_state_jsf = os.path.join(stt_dir, f"{base_name}.json")
     if os.path.exists(prod_state_jsf):
         with open(prod_state_jsf, 'r') as file:
             product_latest_state : list[dict[str, any]] = json.load(file)
+    else:
+        # Create initial state - assuming everything is full initially
+        product_latest_state = [
+            {
+                'name'   : x['name'],
+                'coords' : x['coords'],
+                'state'  : 'full'
+            }
+            for x in products_list
+        ]
 
     return (products_list, product_latest_state)
 
@@ -113,16 +122,19 @@ def compute_device_diff(oliwo : OliwoModel, image_file : str) -> tuple:
         return [], []
         
     if not os.path.exists(previous_frame_file):
-        print(f"WARNING: Previous frame not found: {previous_frame_file}")
-        print("This is normal during setup - using empty diff")
+        print(f"INFO: Previous frame not found: {previous_frame_file}")
+        print("This is normal during first scan - no differences to detect")
         diffrence_xyxy = []
     else:
-        # find all difrences between them
+        # find all differences between them
+        print(f"Comparing: {previous_frame_file} -> {latest_frame_file}")
         diffrence_xyxy = find_differences(previous_frame_file, latest_frame_file)
+        print(f"Found {len(diffrence_xyxy)} differences")
 
-    # predict all boxes
+    # predict all boxes in current frame
     latest_image = oliwo.load_image(latest_frame_file)
     predicted_xyxy = oliwo.predict(latest_image)
+    print(f"Predicted {len(predicted_xyxy)} objects in current frame")
     
     # Load product info - check if file exists first
     fname, base_name = grab_file_from_path(latest_frame_file)
@@ -130,38 +142,63 @@ def compute_device_diff(oliwo : OliwoModel, image_file : str) -> tuple:
     
     if not os.path.exists(prod_info_jsf):
         print(f"ERROR: Product info file not found: {prod_info_jsf}")
-        print("This should have been created in the previous step")
+        print("Run setup first to create product information")
         return diffrence_xyxy, predicted_xyxy
     
-    products_list, product_latest_state = load_prdocuts(latest_frame_file)
+    products_list, product_latest_state = load_products(latest_frame_file)
 
-    # get valid
+    # get valid product names that match with detected boxes
     img_diff_names = get_matching_prod_names(diffrence_xyxy, products_list)
     img_pred_names = get_matching_prod_names(predicted_xyxy, products_list)
 
-    # loop over everything thing
-    for i in range(len(product_latest_state)):
+    print(f"Products with differences: {img_diff_names}")
+    print(f"Products with objects detected: {img_pred_names}")
 
-        # get product
+    # Update product states based on detection results
+    for i in range(len(product_latest_state)):
         prod = product_latest_state[i]
         prod_name = prod['name']
 
-        # check if exist in both
+        # check if product exists in both difference and prediction
         exist_in_diff = any([xn == prod_name for xn in img_diff_names])
         exist_in_pred = any([xn == prod_name for xn in img_pred_names])
 
+        # State logic:
+        # - If there's a difference AND objects detected -> reduced
+        # - If there's a difference AND no objects detected -> empty  
+        # - If no difference detected -> keep previous state
         if exist_in_diff and exist_in_pred:
             product_latest_state[i]['state'] = 'reduced'
-        
-        if exist_in_diff and not exist_in_pred:
+            print(f"  {prod_name}: reduced")
+        elif exist_in_diff and not exist_in_pred:
             product_latest_state[i]['state'] = 'empty'
+            print(f"  {prod_name}: empty")
+        # If no difference, keep previous state (no change)
 
-    # convert to json
+    # Save updated product state
+    os.makedirs(stt_dir, exist_ok=True)
     prod_state_jsf = os.path.join(stt_dir, f"{base_name}.json")
     with open(prod_state_jsf, "w") as f:
         json.dump(product_latest_state, f, indent = 2)
+    
+    print(f"Updated product state saved to: {prod_state_jsf}")
 
     return diffrence_xyxy, predicted_xyxy
+
+def update_last_state(current_frame_path: str):
+    """Update last_state with current frame after inference"""
+    global absolute_root_directory
+    
+    parent_dir = os.path.dirname(absolute_root_directory)
+    last_state_dir = os.path.join(parent_dir, 'last_state')
+    os.makedirs(last_state_dir, exist_ok=True)
+    
+    fname, base_name = grab_file_from_path(current_frame_path)
+    last_state_path = os.path.join(last_state_dir, f"{base_name}.jpg")
+    
+    # Copy current frame to last_state (will be used for next comparison)
+    shutil.copy2(current_frame_path, last_state_path)
+    print(f"Updated last_state: {last_state_path}")
 
 def setup_directories(oliwo : OliwoModel) -> None:
     global absolute_root_directory
@@ -188,17 +225,22 @@ def setup_directories(oliwo : OliwoModel) -> None:
     # setup state directories with proper parent path
     parent_dir = os.path.dirname(absolute_root_directory)  # app_root
     
-    print("Setting up state directory")
+    print("Setting up last_state directory")
     last_state_dir = os.path.join(parent_dir, 'last_state')
     create_directory_force(last_state_dir)
+    # Copy current images to last_state for initial setup
     copy_directory_contents(
         source_dir = source_dir,
         target_dir = last_state_dir
     )
 
-    print("Setup Product Directories")
+    print("Setup Product Information Directory")
     information_dir = os.path.join(parent_dir, 'product_information')
     create_directory_force(information_dir)
+    
+    print("Setup Product State Directory")
+    product_state_dir = os.path.join(parent_dir, 'product_state')
+    create_directory_force(product_state_dir)
     
     # STEP 1: Create product information files first
     print("Step 1: Creating product information files...")
@@ -217,16 +259,12 @@ def setup_directories(oliwo : OliwoModel) -> None:
 
     print("Step 1 completed: All product information files created")
 
-    # STEP 2: Create product state directory
-    print("Step 2: Creating product state files...")
-    product_state_dir = os.path.join(parent_dir, 'product_state')
-    create_directory_force(product_state_dir)
-
-    # STEP 3: Create initial states (this will now work because product info exists)
-    print("Step 3: Initializing product states...")
+    # STEP 2: Create initial product state files
+    print("Step 2: Creating initial product state files...")
     for image_path in image_files:
         _, base_name = grab_file_from_path(image_path)
         try:
+            # This will create initial state files
             diffrence_xyxy, predicted_xyxy = compute_device_diff(oliwo, base_name)
             print(f"  Initialized state for: {base_name}")
         except Exception as e:
@@ -253,56 +291,83 @@ def running_service(oliwo : OliwoModel):
     image_file_list = find_jpg_images(src_dir)
     print(f"Found {len(image_file_list)} Devices for monitoring")
 
-    # image files
-    last_modified_time = [0] * len(image_file_list)
+    if len(image_file_list) == 0:
+        print("ERROR: No image files found to monitor")
+        print("Make sure images are present in devices directory")
+        return
+
+    # image files modification time tracking
+    last_modified_time = {}
+    for file_path in image_file_list:
+        last_modified_time[file_path] = 0
+
+    print("Starting monitoring service...")
+    scan_count = 0
 
     try:
         while True:
             
-            # enumare the file list
-            for i, file_path in enumerate(image_file_list):
+            # enumerate the file list
+            for file_path in image_file_list:
             
                 # Check if the file has been modified
-                current_modified = os.path.getmtime(file_path)
-                
-                # check current modified time
-                if current_modified == last_modified_time[i]:
+                try:
+                    current_modified = os.path.getmtime(file_path)
+                except OSError:
+                    # File might not exist or be accessible
                     continue
                 
-
-                # last updated time is diffrent
+                # check current modified time
+                if current_modified == last_modified_time[file_path]:
+                    continue
+                
+                # File has been modified - process it
                 file_name, base_name = grab_file_from_path(file_path)
-                print("Updating :", file_name)
+                scan_count += 1
+                print(f"\n=== SCAN #{scan_count} ===")
+                print(f"Processing updated file: {file_name}")
+                print(f"Modified time: {time.ctime(current_modified)}")
                 
                 try:
+                    # Perform inference and state comparison
                     diffrence_xyxy, predicted_xyxy = compute_device_diff(oliwo, base_name)
 
-                    # update time
-                    last_modified_time[i] = current_modified
+                    # Update last_state AFTER inference is complete
+                    update_last_state(file_path)
 
-                    # load image frame
+                    # Update modification time only after successful processing
+                    last_modified_time[file_path] = current_modified
+
+                    # Load image for visual output
                     image = oliwo.load_image(file_path)
 
-                    # create overlay
-                    ovelayed = oliwo.overlay(
-                        image, 
-                        predicted_xyxy,
-                        fill_alpha = 0,
-                        line_width = 5
-                    )
+                    # Create visual overlay with detected objects
+                    if predicted_xyxy:
+                        overlayed = oliwo.overlay(
+                            image, 
+                            predicted_xyxy,
+                            fill_alpha = 0,
+                            line_width = 5
+                        )
 
-                    # output path
-                    output_path = os.path.join(vos_dir, file_name)
-                    ovelayed.save(output_path)
+                        # Save visual output
+                        output_path = os.path.join(vos_dir, file_name)
+                        overlayed.save(output_path)
+                        
+                        print(f"Generated visual output: {output_path}")
                     
-                    print(f"Generated visual output: {output_path}")
+                    print(f"Scan #{scan_count} completed successfully")
+                    print(f"  - Differences detected: {len(diffrence_xyxy)}")
+                    print(f"  - Objects predicted: {len(predicted_xyxy)}")
                     
                 except Exception as e:
                     print(f"Error processing {file_name}: {e}")
 
-            time.sleep(1)  # Simulate some work
+            time.sleep(2)  # Check for file updates every 2 seconds
+            
     except KeyboardInterrupt:
-        print("Received Ctrl+C. Exiting gracefully...")
+        print("\nReceived Ctrl+C. Exiting gracefully...")
+        print(f"Total scans performed: {scan_count}")
     
 
 if __name__ == "__main__":

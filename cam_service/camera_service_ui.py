@@ -4,6 +4,8 @@ import time
 import threading
 import subprocess
 import cv2 as cv
+import json
+import shutil
 from datetime import datetime
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
@@ -84,6 +86,7 @@ class ScannerServiceThread(QThread):
     scanner_started = pyqtSignal()
     scanner_stopped = pyqtSignal()
     frame_saved = pyqtSignal(str)
+    inference_completed = pyqtSignal(str, list, list)  # filename, diff_boxes, pred_boxes
 
     def __init__(self, video_preview_service, devices_dir, video_path):
         super().__init__()
@@ -91,15 +94,104 @@ class ScannerServiceThread(QThread):
         self.devices_dir = devices_dir
         self.video_path = video_path
         self.is_running = False
-        self.scanner_process = None
         self.base_name = os.path.splitext(os.path.basename(video_path))[0]
         
-        # Setup paths for product info copying
+        # Setup paths
         script_dir = os.path.dirname(os.path.abspath(__file__))
         project_root = os.path.dirname(script_dir)
         app_root = os.path.join(project_root, 'retruxosaproject', 'app_root')
-        self.product_info_dir = os.path.join(app_root, 'product_information')
         self.last_state_dir = os.path.join(app_root, 'last_state')
+        self.product_info_dir = os.path.join(app_root, 'product_information')
+        self.product_state_dir = os.path.join(app_root, 'product_state')
+        self.visual_dir = os.path.join(project_root, 'retruxosaproject', 'app_root', 'active_state', 'product_visual')
+        
+        # Ensure directories exist
+        os.makedirs(self.last_state_dir, exist_ok=True)
+        os.makedirs(self.product_info_dir, exist_ok=True)
+        os.makedirs(self.product_state_dir, exist_ok=True)
+        os.makedirs(self.visual_dir, exist_ok=True)
+        
+        # Initialize OliwoModel
+        self.oliwo_model = None
+        self.load_oliwo_model()
+        
+    def load_oliwo_model(self):
+        try:
+            self.status_updated.emit("Loading OliwoModel...")
+            
+            # Get script paths - cam_service_ui.py is in cam_service directory
+            script_dir = os.path.dirname(os.path.abspath(__file__))  # cam_service/
+            project_root = os.path.dirname(script_dir)  # retrux-shelf-eye/
+            
+            # Based on your directory structure, oliwo_weights is in product_scan/
+            possible_paths = [
+                os.path.join(project_root, 'product_scan', 'oliwo_weights'),  # retrux-shelf-eye/product_scan/oliwo_weights
+                os.path.join(script_dir, '..', 'product_scan', 'oliwo_weights'),  # ../product_scan/oliwo_weights
+                os.path.join(project_root, 'oliwo_weights'),  # fallback: retrux-shelf-eye/oliwo_weights
+                os.path.join(script_dir, 'oliwo_weights'),  # fallback: cam_service/oliwo_weights
+            ]
+            
+            oliwo_path_found = None
+            for path in possible_paths:
+                abs_path = os.path.abspath(path)
+                self.status_updated.emit(f"Trying path: {abs_path}")
+                
+                if os.path.exists(abs_path) and os.path.isdir(abs_path):
+                    # Check if required files exist
+                    xoliwo_file = os.path.join(abs_path, 'xoliwo.py')
+                    xcodiff_file = os.path.join(abs_path, 'xcodiff.py')
+                    
+                    if os.path.exists(xoliwo_file) and os.path.exists(xcodiff_file):
+                        oliwo_path_found = abs_path
+                        self.status_updated.emit(f"Found oliwo_weights at: {abs_path}")
+                        break
+                    else:
+                        self.status_updated.emit(f"Path exists but missing required files: {abs_path}")
+                else:
+                    self.status_updated.emit(f"Path not found: {abs_path}")
+            
+            if not oliwo_path_found:
+                raise FileNotFoundError("oliwo_weights directory not found in any expected location")
+            
+            # Add parent directory of oliwo_weights to Python path
+            # If oliwo_weights is at /path/to/product_scan/oliwo_weights
+            # We need to add /path/to/product_scan to sys.path
+            parent_path = os.path.dirname(oliwo_path_found)
+            if parent_path not in sys.path:
+                sys.path.insert(0, parent_path)
+                self.status_updated.emit(f"Added to Python path: {parent_path}")
+            
+            # Try importing the modules
+            self.status_updated.emit("Importing OliwoModel...")
+            from oliwo_weights.xoliwo import OliwoModel
+            
+            self.status_updated.emit("Importing utility functions...")
+            from oliwo_weights.xcodiff import (
+                find_differences, get_matching_prod_names, grab_file_from_path
+            )
+            
+            # Initialize the model - OliwoModel() takes no parameters
+            self.status_updated.emit("Initializing OliwoModel...")
+            self.oliwo_model = OliwoModel()
+            
+            # Store utility functions
+            self.find_differences = find_differences
+            self.get_matching_prod_names = get_matching_prod_names
+            self.grab_file_from_path = grab_file_from_path
+            
+            self.status_updated.emit("OliwoModel loaded successfully!")
+            
+        except ImportError as e:
+            error_msg = f"Import error: {e}"
+            self.status_updated.emit(f"Import failed: {error_msg}")
+            self.status_updated.emit("Make sure dependencies are installed: pip install torch pillow sahi transformers opencv-python numpy")
+            self.oliwo_model = None
+            
+        except Exception as e:
+            error_msg = f"Failed to load OliwoModel: {e}"
+            self.status_updated.emit(f"Loading failed: {error_msg}")
+            self.status_updated.emit("Check if model files exist in oliwo_weights directory")
+            self.oliwo_model = None
         
     def run(self):
         try:
@@ -113,49 +205,65 @@ class ScannerServiceThread(QThread):
                 self.status_updated.emit("⚠️ Setup belum dilakukan! Jalankan Setup terlebih dahulu.")
                 return
             
-            # Start shelf_scan service in background
-            self.start_scanner_service()
-            
-            # Main loop untuk menyimpan frame dengan timestamp
-            frame_counter = 0
-            while self.is_running:
-                if self.video_preview_service and self.video_preview_service.isRunning():
-                    current_frame = self.video_preview_service.get_current_frame()
-                    if current_frame is not None:
-                        # Strategy 1: Use fixed filename (recommended)
-                        # Always overwrite the same file so shelf_scan can monitor it
-                        fixed_frame_filename = f"{self.base_name}.jpg"
-                        fixed_frame_path = os.path.join(self.devices_dir, fixed_frame_filename)
-                        
-                        # Strategy 2: Also save timestamp version for history
-                        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                        timestamp_filename = f"{self.base_name}_{timestamp}.jpg"
-                        timestamp_path = os.path.join(self.devices_dir, timestamp_filename)
-                        
-                        # Save both versions
-                        cv.imwrite(fixed_frame_path, current_frame)  # For shelf_scan monitoring
-                        cv.imwrite(timestamp_path, current_frame)    # For history/backup
-                        
-                        self.frame_saved.emit(fixed_frame_filename)
-                        self.status_updated.emit(f"📸 Frame disimpan: {fixed_frame_filename} & {timestamp_filename}")
-                        
-                        frame_counter += 1
-                        
-                # Wait 5 seconds before next frame capture
-                for i in range(50):  # 5 seconds = 50 * 0.1 seconds
-                    if not self.is_running:
-                        break
-                    time.sleep(0.1)
-                        
+            # Choose processing method based on OliwoModel availability
+            if self.oliwo_model:
+                self.status_updated.emit("✅ Using direct OliwoModel processing")
+                self.run_direct_processing()
+            else:
+                self.status_updated.emit("⚠️ OliwoModel not available, using subprocess method")
+                self.run_subprocess_processing()
+                
         except Exception as e:
             self.status_updated.emit(f"❌ Error pada Scanner Service: {e}")
         finally:
-            self.stop_scanner_service()
             self.scanner_stopped.emit()
             self.status_updated.emit("🛑 Scanner Service dihentikan.")
 
-    def start_scanner_service(self):
+    def run_direct_processing(self):
+        """Run scanner using direct OliwoModel calls"""
+        scan_count = 0
+        while self.is_running:
+            if self.video_preview_service and self.video_preview_service.isRunning():
+                current_frame = self.video_preview_service.get_current_frame()
+                if current_frame is not None:
+                    # Save current frame for processing
+                    current_frame_filename = f"{self.base_name}.jpg"
+                    current_frame_path = os.path.join(self.devices_dir, current_frame_filename)
+                    
+                    # Save current frame
+                    cv.imwrite(current_frame_path, current_frame)
+                    self.status_updated.emit(f"📸 Frame captured: {current_frame_filename}")
+                    
+                    # Wait a bit to ensure file is written
+                    time.sleep(0.5)
+                    
+                    # Perform inference and comparison
+                    try:
+                        diff_boxes, pred_boxes = self.perform_inference(current_frame_path)
+                        
+                        # Update last_state AFTER inference is complete
+                        self.update_last_state(current_frame_path)
+                        
+                        # Generate visual output
+                        self.generate_visual_output(current_frame_path, pred_boxes)
+                        
+                        scan_count += 1
+                        self.status_updated.emit(f"✅ Scan #{scan_count} completed - Found {len(pred_boxes)} objects")
+                        self.inference_completed.emit(current_frame_filename, diff_boxes, pred_boxes)
+                        
+                    except Exception as e:
+                        self.status_updated.emit(f"❌ Error during inference: {e}")
+            
+            # Wait 10 seconds before next scan
+            for i in range(100):  # 10 seconds = 100 * 0.1 seconds
+                if not self.is_running:
+                    break
+                time.sleep(0.1)
+
+    def run_subprocess_processing(self):
+        """Run scanner using subprocess calls to shelf_scan.py"""
         try:
+            # Start the shelf_scan service subprocess
             script_dir = os.path.dirname(os.path.abspath(__file__))
             project_root = os.path.dirname(script_dir)
             shelf_scan_script = os.path.join(project_root, 'product_scan', 'shelf_scan.py')
@@ -163,36 +271,179 @@ class ScannerServiceThread(QThread):
             if not os.path.exists(shelf_scan_script):
                 shelf_scan_script = os.path.join(project_root, 'shelf_scan.py')
 
-            if os.path.exists(shelf_scan_script):
-                self.scanner_process = subprocess.Popen(
-                    [sys.executable, shelf_scan_script, "service"],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    text=True
-                )
-                self.status_updated.emit("🚀 Shelf Scanner Service dimulai di background")
-            else:
-                self.status_updated.emit("⚠️ shelf_scan.py tidak ditemukan, hanya menyimpan frame")
-                
-        except Exception as e:
-            self.status_updated.emit(f"⚠️ Tidak bisa memulai scanner service: {e}")
+            if not os.path.exists(shelf_scan_script):
+                self.status_updated.emit("❌ shelf_scan.py not found")
+                return
 
-    def stop_scanner_service(self):
-        if self.scanner_process:
+            # Start the shelf_scan service in background
+            self.scanner_process = subprocess.Popen(
+                [sys.executable, shelf_scan_script, "service"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+                universal_newlines=True
+            )
+            
+            self.status_updated.emit("🚀 Started shelf_scan.py service subprocess")
+            
+            # Main loop - save frames for shelf_scan to process
+            scan_count = 0
+            while self.is_running:
+                if self.video_preview_service and self.video_preview_service.isRunning():
+                    current_frame = self.video_preview_service.get_current_frame()
+                    if current_frame is not None:
+                        # Save current frame (shelf_scan service will detect the change)
+                        current_frame_filename = f"{self.base_name}.jpg"
+                        current_frame_path = os.path.join(self.devices_dir, current_frame_filename)
+                        
+                        cv.imwrite(current_frame_path, current_frame)
+                        scan_count += 1
+                        self.status_updated.emit(f"📸 Scan #{scan_count}: Frame saved for processing")
+                        self.frame_saved.emit(current_frame_filename)
+                
+                # Wait 10 seconds before next frame
+                for i in range(100):
+                    if not self.is_running:
+                        break
+                    time.sleep(0.1)
+                        
+        except Exception as e:
+            self.status_updated.emit(f"❌ Error in subprocess processing: {e}")
+        finally:
+            self.stop_scanner_subprocess()
+
+    def stop_scanner_subprocess(self):
+        """Stop the shelf_scan subprocess if running"""
+        if hasattr(self, 'scanner_process') and self.scanner_process:
             try:
                 self.scanner_process.terminate()
                 self.scanner_process.wait(timeout=5)
-                self.status_updated.emit("🔚 Scanner Service process dihentikan")
+                self.status_updated.emit("🔚 Subprocess scanner stopped")
             except subprocess.TimeoutExpired:
                 self.scanner_process.kill()
-                self.status_updated.emit("🔪 Scanner Service process dipaksa berhenti")
+                self.status_updated.emit("🔪 Subprocess scanner forcefully terminated")
             except Exception as e:
-                self.status_updated.emit(f"⚠️ Error menghentikan scanner process: {e}")
+                self.status_updated.emit(f"⚠️ Error stopping subprocess: {e}")
+
+    def perform_inference(self, current_frame_path):
+        """Perform object detection and state comparison"""
+        try:
+            # Get paths
+            _, base_name = self.grab_file_from_path(current_frame_path)
+            previous_frame_path = os.path.join(self.last_state_dir, f"{base_name}.jpg")
+            
+            # Find differences between current and previous frame
+            if os.path.exists(previous_frame_path):
+                diff_boxes = self.find_differences(previous_frame_path, current_frame_path)
+                self.status_updated.emit(f"🔄 Found {len(diff_boxes)} differences from previous state")
+            else:
+                diff_boxes = []
+                self.status_updated.emit("📋 No previous state found - first scan")
+            
+            # Predict objects in current frame
+            latest_image = self.oliwo_model.load_image(current_frame_path)
+            pred_boxes = self.oliwo_model.predict(latest_image)
+            self.status_updated.emit(f"🎯 Detected {len(pred_boxes)} objects")
+            
+            # Load product information
+            prod_info_path = os.path.join(self.product_info_dir, f"{base_name}.json")
+            with open(prod_info_path, 'r') as f:
+                products_list = json.load(f)
+            
+            # Load current product state or create initial state
+            prod_state_path = os.path.join(self.product_state_dir, f"{base_name}.json")
+            if os.path.exists(prod_state_path):
+                with open(prod_state_path, 'r') as f:
+                    product_latest_state = json.load(f)
+            else:
+                # Create initial state (all products full)
+                product_latest_state = [
+                    {
+                        'name': x['name'],
+                        'coords': x['coords'],
+                        'state': 'full'
+                    }
+                    for x in products_list
+                ]
+            
+            # Get matching product names
+            img_diff_names = self.get_matching_prod_names(diff_boxes, products_list)
+            img_pred_names = self.get_matching_prod_names(pred_boxes, products_list)
+            
+            # Update product states
+            for i in range(len(product_latest_state)):
+                prod = product_latest_state[i]
+                prod_name = prod['name']
+                
+                exist_in_diff = any(xn == prod_name for xn in img_diff_names)
+                exist_in_pred = any(xn == prod_name for xn in img_pred_names)
+                
+                if exist_in_diff and exist_in_pred:
+                    product_latest_state[i]['state'] = 'reduced'
+                elif exist_in_diff and not exist_in_pred:
+                    product_latest_state[i]['state'] = 'empty'
+                # If no change detected, keep previous state
+            
+            # Save updated product state
+            with open(prod_state_path, 'w') as f:
+                json.dump(product_latest_state, f, indent=2)
+            
+            self.status_updated.emit(f"💾 Updated product states: {os.path.basename(prod_state_path)}")
+            
+            return diff_boxes, pred_boxes
+            
+        except Exception as e:
+            self.status_updated.emit(f"❌ Error in perform_inference: {e}")
+            return [], []
+    
+    def update_last_state(self, current_frame_path):
+        """Update last_state with current frame AFTER inference is complete"""
+        try:
+            _, base_name = self.grab_file_from_path(current_frame_path)
+            last_state_path = os.path.join(self.last_state_dir, f"{base_name}.jpg")
+            
+            # Copy current frame to last_state (this will be used in next comparison)
+            shutil.copy2(current_frame_path, last_state_path)
+            self.status_updated.emit(f"🔄 Updated last_state: {base_name}.jpg")
+            
+        except Exception as e:
+            self.status_updated.emit(f"❌ Error updating last_state: {e}")
+    
+    def generate_visual_output(self, frame_path, pred_boxes):
+        """Generate visual output with bounding boxes"""
+        try:
+            if not pred_boxes:
+                return
+                
+            _, base_name = self.grab_file_from_path(frame_path)
+            
+            # Load image and create overlay
+            image = self.oliwo_model.load_image(frame_path)
+            overlayed = self.oliwo_model.overlay(
+                image, 
+                pred_boxes,
+                fill_alpha=0,
+                line_width=5
+            )
+            
+            # Save visual output
+            visual_output_path = os.path.join(self.visual_dir, f"{base_name}.jpg")
+            overlayed.save(visual_output_path)
+            
+            self.status_updated.emit(f"🎨 Visual output generated: {base_name}.jpg")
+            
+        except Exception as e:
+            self.status_updated.emit(f"❌ Error generating visual output: {e}")
 
     def stop(self):
         self.is_running = False
+        # Stop subprocess if it exists
+        if hasattr(self, 'scanner_process'):
+            self.stop_scanner_subprocess()
 
 
+# Rest of the classes remain the same...
 class CameraServiceThread(QThread):
     status_updated = pyqtSignal(str)
     camera_found = pyqtSignal(list)
@@ -447,6 +698,7 @@ class CameraServiceWindow(QMainWindow):
         self.scanner_thread.scanner_started.connect(self.on_scanner_started)
         self.scanner_thread.scanner_stopped.connect(self.on_scanner_stopped)
         self.scanner_thread.frame_saved.connect(self.on_frame_saved)
+        self.scanner_thread.inference_completed.connect(self.on_inference_completed)
         
         self.scanner_thread.start()
 
@@ -474,6 +726,11 @@ class CameraServiceWindow(QMainWindow):
     def on_frame_saved(self, filename):
         # Optional: You can add additional logic here when a frame is saved
         pass
+
+    def on_inference_completed(self, filename, diff_boxes, pred_boxes):
+        """Handle inference completion with results"""
+        self.log_status(f"📊 Inference completed for {filename}")
+        self.log_status(f"  - Differences: {len(diff_boxes)}, Objects: {len(pred_boxes)}")
 
     def on_setup_finished(self):
         self.log_status("Thread setup selesai.")
