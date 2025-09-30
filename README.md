@@ -15,6 +15,7 @@
     <img src="./thumbnail.png" height="300" alt="packaging-box-website">
 </a>
 </p>
+</div>
 
 <p align="center">
 <a target="_blank" href="#"><img height="20" src="https://img.shields.io/github/license/username/retrux-shelf-eye" alt="License"></a>
