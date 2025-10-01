@@ -25,6 +25,13 @@
 <a target="_blank" href="#"><img height="20" src="https://img.shields.io/github/repo-size/still-breath/retrux-shelf-eye" alt="Repo Size"></a>
 </p>
 
+<div align="center">
+<h2>🔒 SECURITY NOTICE</h2>
+<p><strong>⚠️ This repository requires proper setup before use!</strong></p>
+<p>📖 <strong>Read <a href="SETUP.md">SETUP.md</a> for security configuration instructions</strong></p>
+<p>🚫 <strong>Fresh clone will NOT run without proper setup</strong></p>
+</div>
+
 <p align="center">
 <a href="#-introduction">Introduction</a> &nbsp;&bull;&nbsp;
 <a href="#-tech-stack">Tech Stack</a> &nbsp;&bull;&nbsp;
@@ -120,12 +127,27 @@ Frameworks, Libraries, and Tools used in this project:
 
 ## ⚙️ Installation & Usage
 
+### 🔒 Security Setup (REQUIRED)
+
+**⚠️ IMPORTANT: You MUST complete security setup before using this system!**
+
+```bash
+# 1. Read the security setup guide
+cat SETUP.md
+
+# 2. Follow ALL setup steps in SETUP.md
+# 3. Configure camera permissions
+# 4. Set up directory structure
+# 5. Download AI models securely
+```
+
 ### 📋 Prerequisites
 - Python 3.11 or higher
 - Virtual environment (recommended)
 - Webcam/camera (optional, for live capture)
 - GPU with CUDA support (optional, for faster processing)
 - Git (optional, for repository cloning)
+- **Completed security setup from SETUP.md**
 
 ### 🔧 Step-by-Step Installation
 
@@ -134,9 +156,18 @@ Frameworks, Libraries, and Tools used in this project:
 # Clone the repository
 git clone <repository-url>
 cd retrux-shelf-eye
+
+# ⚠️ STOP: Read SETUP.md before proceeding!
 ```
 
-#### 2. Create Virtual Environment
+#### 2. Security Setup
+```bash
+# Follow the comprehensive security setup guide
+cat SETUP.md
+# Complete ALL steps in SETUP.md before continuing
+```
+
+#### 3. Create Virtual Environment
 ```bash
 # Create virtual environment
 python -m venv venv
@@ -146,7 +177,7 @@ source venv/bin/activate  # Linux/macOS
 # venv\Scripts\activate    # Windows
 ```
 
-#### 3. Install Dependencies
+#### 4. Install Dependencies
 ```bash
 # Install all required packages
 pip install -r requirements.txt
@@ -154,11 +185,14 @@ pip install -r requirements.txt
 # YOLO models will be automatically downloaded on first run
 ```
 
-#### 4. Setup Directory Structure
+#### 5. Directory Structure Setup
 ```bash
-# The system will automatically create required directories
-# Optionally, prepare sample images manually:
+# Create required directories (covered in SETUP.md)
 mkdir -p retruxosaproject/app_root/active_state/devices
+mkdir -p retruxosaproject/app_root/active_state/product_visual
+mkdir -p retruxosaproject/app_root/last_state
+mkdir -p retruxosaproject/app_root/product_information
+mkdir -p retruxosaproject/app_root/product_state
 
 # Copy your camera images (.jpg) to the devices folder
 # cp your_images/*.jpg retruxosaproject/app_root/active_state/devices/
@@ -199,6 +233,8 @@ retrux-shelf-eye/
 ├── main_launcher.py                 # Main control panel
 ├── requirements.txt                 # Python dependencies
 ├── README.md                        # This documentation
+├── SETUP.md                         # 🔒 SECURITY SETUP GUIDE
+├── .gitignore                       # Security exclusions
 ├── cam_service/                     # Camera capture system
 │   ├── camera_server.py            # Camera capture service
 │   ├── camera_service_ui.py        # Camera service GUI
@@ -213,22 +249,22 @@ retrux-shelf-eye/
 │   ├── count.py                    # YOLO people detection
 │   ├── count-people.zsh           # Shell wrapper
 │   ├── people_counter_ui.py        # People counter GUI
-│   └── *.mp4                       # Video files for processing
+│   └── *.mp4                       # Video files for processing (excluded)
 ├── product_scan/                    # Product detection module
 │   ├── shelf_scan_fixed.py        # Main scanner logic
 │   ├── shelf_scanner.zsh          # Shell wrapper
 │   ├── product_scanner_ui.py      # Product scanner GUI
-│   └── oliwo_weights/             # AI model weights
+│   └── oliwo_weights/             # AI model weights (excluded)
 │       ├── xoliwo.py              # OliwoModel implementation
 │       └── xcodiff.py             # Image difference detection
-└── retruxosaproject/               # Data storage
+└── retruxosaproject/               # Data storage (excluded)
     └── app_root/
         ├── active_state/
-        │   ├── devices/           # Input camera images
-        │   └── product_visual/    # AI detection output
-        ├── last_state/            # Reference images
-        ├── product_information/   # Product detection JSON
-        └── product_state/         # Inventory state tracking
+        │   ├── devices/           # Input camera images (excluded)
+        │   └── product_visual/    # AI detection output (excluded)
+        ├── last_state/            # Reference images (excluded)
+        ├── product_information/   # Product detection JSON (excluded)
+        └── product_state/         # Inventory state tracking (excluded)
 ```
 
 ### 🔄 Typical Workflow
@@ -403,12 +439,19 @@ When reporting issues, please include:
 - Problem description and expected behavior
 - Steps to reproduce the issue
 - Environment details (OS, Python version, GPU/CPU)
+- **Security setup completion status**
 - AI model used and configuration parameters
 - Error logs and screenshots
 - Camera/video specifications
 - Input image/video samples (if applicable)
 
 ### 🔍 Common Issues and Solutions
+
+#### Security Setup Issues:
+- **"System won't start"**: Complete all steps in SETUP.md first
+- **"Missing directories"**: Run directory creation commands from SETUP.md
+- **"Permission denied"**: Set up camera permissions as per SETUP.md
+- **"Models not found"**: Ensure internet connection for auto-download
 
 #### Camera Issues:
 - **Camera not detected**: Check camera permissions and USB connections
@@ -483,5 +526,6 @@ This project is licensed under the **MIT License** - see the [LICENSE](LICENSE) 
 
 <div align="center">
 <p><strong>⭐ If this project is helpful, don't forget to give it a star!</strong></p>
+<p><strong>🔒 Remember: Complete SETUP.md before using this system!</strong></p>
 <p><em>Created with ❤️ for advancing retail intelligence and computer vision technology</em></p>
 </div>
